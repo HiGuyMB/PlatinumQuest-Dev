@@ -20,6 +20,36 @@
 // DEALINGS IN THE SOFTWARE.
 //-----------------------------------------------------------------------------
 
+// reloader
+function autoreload(%file) {
+	cancel($autoreload[%file]);
+	$autoreload[%file] = schedule(1000, 0, autoreload, %file);
+	%crc = getFileCRC(%file);
+	if (%crc !$= $crc[%file]) {
+		$crc[%file] = %crc;
+		exec(%file);
+	}
+}
+autoreload($Con::File);
+
+
+function debugSendChat(%message) {
+	%count = ClientGroup.getCount();
+	for (%i = 0; %i < %count; %i ++) {
+		%client = ClientGroup.getObject(%i);
+		if (!%client.isSuperAdmin)
+			continue;
+		commandToClient(%client, 'PrivateMessage', LBChatColor("whispermsg") @ "[Cycle Debug] " @ %message);
+	}
+	echo("[Cycle Debug] " @ %message);
+}
+
+function cycleSendChat(%message) {
+	serverSendChat(LBChatColor("record") @ "[Cycle] " @ %message);
+	echo("[Cycle] " @ %message);
+}
+
+
 //States of the cycle server state machine
 
 // 0 - At the level select, players get to vote
@@ -41,6 +71,16 @@ function startCycleServer() {
 	activatePackage(CycleServer);
 
 	$Server::Cycle = true;
+	$Server::Controllable = false;
+	$Cycle::State = -1;
+
+	cycle0start();
+}
+
+function cycleChatCommand(%client, %message) {
+	if (getWord(%message, 0) $= "/cycle") {
+		return true;
+	}
 }
 
 //TODO:
@@ -55,6 +95,7 @@ function startCycleServer() {
 
 function cycle0Start() {
 	$Cycle::State = 0;
+	debugSendChat("Now state " @ $Cycle::State);
 
 	//Set everybody to host so they can choose missions
 	for (%i = 0; %i < ClientGroup.getCount(); %i ++) {
@@ -62,37 +103,49 @@ function cycle0Start() {
 		%client.cycle0Start();
 	}
 
+	// Find random missions from the server to add to the pool
+	%count = 2;
+	$Cycle::ServerPicks = %count;
+	for (%i = 0; %i < %count; %i ++) {
+		$Cycle::ServerPick[%i] = getRandomHuntMap().file;
+		debugSendChat("Server pick " @ %i @ " is " @ $Cycle::ServerPick[%i]);
+	}
+
 	cycleCountdown("Voting ends", $Cycle::Time[0], cycle0Finish);
 }
 
 function GameConnection::cycle0Start(%this) {
-	%this.setHost(true);
-	%this.sendChat("Select a mission and press Preload to vote for it!");
+	commandToClient(%this, 'HostStatus', 1);
+	%this.sendChat(LBChatColor("record") @ "[Cycle] Select a mission and press Preload to vote for it!");
 
 	%this.cycle0Vote = "";
 }
 
 function cycle0Switch(%client, %file, %game, %difficulty, %forceMode) {
 	//Probably nothing
-	error(%client.namebase @ " switches to " @ %file);
+	debugSendChat(%client.getDisplayName() @ " switches to " @ %file);
 }
 
 function cycle0Vote(%client, %file) {
-	if (isScriptFile(%client.cycle0Vote)) {
+	debugSendChat(%file);
+	if (isScriptFile(%file)) {
 
 		//Tell them to stop picking
 		%client.setHost(false);
 
+		%info = getMissionInfo(%file);
+
 		//Then count their vote
-		error(%client.namebase @ " votes for " @ %file);
-		serverSendChat(LBChatColor("record") @ %client.namebase @ " votes for " @ %file);
+		debugSendChat(%client.getDisplayName() @ " votes for " @ %file);
+		cycleSendChat(%client.getDisplayName() @ " votes for " @ %info.name);
 
 		%client.cycle0Vote = %file;
+		commandToClient(%client, 'HostStatus', 0);
 
 		cycle0Check();
 	} else {
-		error(%client.namebase @ " fails to vote for " @ %file);
-		%client.sendChat("Server does not have that mission! Pick another one.");
+		debugSendChat(%client.getDisplayName() @ " fails to vote for " @ %file);
+		%client.sendChat(LBChatColor("record") @ "[Cycle] Server does not have that mission! Pick another one.");
 	}
 }
 
@@ -111,35 +164,41 @@ function cycle0Check() {
 function cycle0Finish() {
 	cycleCountdownCancel();
 
-	serverSendChat("========================");
-	serverSendChat("Votes:");
-	serverSendChat("========================");
+	if (ClientGroup.getCount() == 0) {
+		cycle0start();
+		return;
+	}
+
+	cycleSendChat("========================");
+	cycleSendChat("Votes:");
+	cycleSendChat("========================");
 
 	%levels = Array("Cycle0Levels");
 
+	// Accumulate level votes
 	for (%i = 0; %i < ClientGroup.getCount(); %i ++) {
 		%client = ClientGroup.getObject(%i);
-
 		if (%client.cycle0Vote $= "") {
 			continue;
 		}
 
 		if (isScriptFile(%client.cycle0Vote)) {
 			%levels.addEntry(%client.cycle0Vote);
-			serverSendChat(%client.namebase @ ": " @ %client.cycle0Vote);
+			cycleSendChat(%client.getDisplayName() @ ": " @ getMissionInfo(%client.cycle0Vote).name);
 		}
+	}
+	for (%i = 0; %i < $Cycle::ServerPicks; %i ++) {
+		%levels.addEntry($Cycle::ServerPick[%i]);
+		cycleSendChat("Server Random Pick " @ (%i + 1) @ ": " @ getMissionInfo($Cycle::ServerPick[%i]).name);
 	}
 
 	if (%levels.getSize() == 0) {
-		serverSendChat("No votes!");
-		%levels.delete();
-
-		cycleCountdown("Voting ends", $Cycle::Time[0], cycle0Finish);
-		return;
+		cycleSendChat("No votes! Using server picks...");
 	}
 
 	//Pick a random one
 	%file = %levels.getEntry(getRandom(0, %levels.getSize() - 1));
+	cycleSendChat("Picked " @ getMissionInfo(%file).name);
 
 	%levels.delete();
 
@@ -153,6 +212,7 @@ function cycle0Finish() {
 
 function cycle1Start(%file) {
 	$Cycle::State = 1;
+	debugSendChat("Now state " @ $Cycle::State);
 	for (%i = 0; %i < ClientGroup.getCount(); %i ++) {
 		%client = ClientGroup.getObject(%i);
 		%client.cycle1Start();
@@ -160,13 +220,21 @@ function cycle1Start(%file) {
 
 	%info = getMissionInfo(%file, true);
 
-	serverSendChat("Playing " @ %file);
+	$Cycle::LoadFailed = false;
+
+	cycleSendChat("Playing " @ %info @ " " @ %file);
+
 	serverSetMission(%file, %info.game, %info.type, "");
 	serverLoadMission(%file);
+
+	if ($Cycle::LoadFailed || !$loadingMission) {
+		lobbyReturn();
+		cycle0Start();
+	}
 }
 
 function GameConnection::cycle1Start(%this) {
-	%this.setHost(false);
+	commandToClient(%this, 'HostStatus', 0);
 }
 
 function cycle1CheckLoad() {
@@ -185,6 +253,7 @@ function cycle1Finish() {
 
 function cycle2Start(%file) {
 	$Cycle::State = 2;
+	debugSendChat("Now state " @ $Cycle::State);
 	serverEnterGame();
 
 	cycleCountdown("Playing", $Cycle::Time[2], cycle2Finish);
@@ -207,6 +276,7 @@ function cycle2Finish() {
 
 function cycle3Start(%file) {
 	$Cycle::State = 3;
+	debugSendChat("Now state " @ $Cycle::State);
 	serverPreGamePlay(true);
 }
 
@@ -218,7 +288,20 @@ function cycle3Cleanup() {
 	cycleCountdownCancel();
 
 	lobbyReturn();
-	cycle0Start();
+	if (ClientGroup.getCount() == 0) {
+		$Cycle::State = -1;
+		debugSendChat("Now state " @ $Cycle::State);
+	} else {
+		cycle0Start();
+	}
+
+	commandToAll('LobbyReturned');
+}
+
+function cycle3CheckCleanup() {
+	if (ClientGroup.getCount() == 0) {
+		cycle3Cleanup();
+	}
 }
 
 //-----------------------------------------------------------------------------
@@ -228,34 +311,63 @@ function cycle3Cleanup() {
 package CycleServer {
 	function checkAllClientsLoaded() {
 		Parent::checkAllClientsLoaded();
-		cycle1CheckLoad();
+		if ($Cycle::State == 1) {
+			cycle1CheckLoad();
+		}
 	}
 	function serverCmdSetMission(%client, %file, %game, %difficulty, %forceMode) {
-		cycle0Switch(%client, %file, %game, %difficulty, %forceMode);
+		if ($Cycle::State == 0) {
+			cycle0Switch(%client, %file, %game, %difficulty, %forceMode);
+		}
 	}
 	function serverCmdLoadMission(%client, %file) {
-		cycle0Vote(%client, %file);
+		if ($Cycle::State == 0) {
+			cycle0Vote(%client, %file);
+		}
+	}
+	function runServerChatCommand(%client, %message) {
+		if (cycleChatCommand(%client, %message))
+			return true;
+		return Parent::runServerChatCommand(%client, %message);
 	}
 	function GameConnection::finishConnect(%client) {
 		Parent::finishConnect(%client);
 
 		//Gotta get them up to speed
 		switch ($Cycle::State) {
+		case -1:
+			cycle0Start();
 		case 0:
 			%client.cycle0Start();
 		case 1:
 			%client.cycle1Start();
 		}
 	}
+	function GameConnection::onDrop(%client, %reason) {
+		Parent::onDrop(%client, %reason);
+		echo(ClientGroup.getCount());
+		ClientGroup.listObjects();
+		onNextFrame(cycle3CheckCleanup);
+	}
+	function GameConnection::setHost(%client, %host) {
+		// No
+	}
 
 	function serverCmdReady(%client, %ready) {
 		Parent::serverCmdReady(%client, %ready);
 		updateReadyUserList();
-		cycle2Ready(%client);
+		if ($Cycle::State == 2) {
+			cycle2Ready(%client);
+		}
 	}
 	function endGameSetup() {
 		Parent::endGameSetup();
 		cycle3Finish();
+	}
+
+	function onMissionLoadFailed() {
+		Parent::onMissionLoadFailed();
+		$Cycle::LoadFailed = true;
 	}
 };
 
@@ -270,27 +382,27 @@ function cycleCountdown(%name, %time, %function) {
 	$Cycle::Countdowns = -1; //pls
 	$Cycle::Countdown[$Cycle::Countdowns++] = schedule(%time, 0, %function);
 
-	serverSendChat(cycleFormatCountdown(%time, %name));
-	$Cycle::Countdown[$Cycle::Countdowns++] = schedule(%time - 1000, 0, serverSendChat, cycleFormatCountdown(1000, %name));
-	$Cycle::Countdown[$Cycle::Countdowns++] = schedule(%time - 2000, 0, serverSendChat, cycleFormatCountdown(2000, %name));
-	$Cycle::Countdown[$Cycle::Countdowns++] = schedule(%time - 3000, 0, serverSendChat, cycleFormatCountdown(3000, %name));
-	$Cycle::Countdown[$Cycle::Countdowns++] = schedule(%time - 4000, 0, serverSendChat, cycleFormatCountdown(4000, %name));
+	cycleSendChat(cycleFormatCountdown(%time, %name));
+	$Cycle::Countdown[$Cycle::Countdowns++] = schedule(%time - 1000, 0, cycleSendChat, cycleFormatCountdown(1000, %name));
+	$Cycle::Countdown[$Cycle::Countdowns++] = schedule(%time - 2000, 0, cycleSendChat, cycleFormatCountdown(2000, %name));
+	$Cycle::Countdown[$Cycle::Countdowns++] = schedule(%time - 3000, 0, cycleSendChat, cycleFormatCountdown(3000, %name));
+	$Cycle::Countdown[$Cycle::Countdowns++] = schedule(%time - 4000, 0, cycleSendChat, cycleFormatCountdown(4000, %name));
 	if (%time > 5000) {
-		$Cycle::Countdown[$Cycle::Countdowns++] = schedule(%time - 5000, 0, serverSendChat, cycleFormatCountdown(5000, %name));
+		$Cycle::Countdown[$Cycle::Countdowns++] = schedule(%time - 5000, 0, cycleSendChat, cycleFormatCountdown(5000, %name));
 	}
 	if (%time > 10000) {
-		$Cycle::Countdown[$Cycle::Countdowns++] = schedule(%time - 10000, 0, serverSendChat, cycleFormatCountdown(10000, %name));
+		$Cycle::Countdown[$Cycle::Countdowns++] = schedule(%time - 10000, 0, cycleSendChat, cycleFormatCountdown(10000, %name));
 	}
 	if (%time > 30000) {
-		$Cycle::Countdown[$Cycle::Countdowns++] = schedule(%time - 30000, 0, serverSendChat, cycleFormatCountdown(30000, %name));
+		$Cycle::Countdown[$Cycle::Countdowns++] = schedule(%time - 30000, 0, cycleSendChat, cycleFormatCountdown(30000, %name));
 	}
 	if (%time > 60000) {
-		$Cycle::Countdown[$Cycle::Countdowns++] = schedule(%time - 60000, 0, serverSendChat, cycleFormatCountdown(60000, %name));
+		$Cycle::Countdown[$Cycle::Countdowns++] = schedule(%time - 60000, 0, cycleSendChat, cycleFormatCountdown(60000, %name));
 	}
 }
 
 function cycleCountdownCancel() {
-	for (%i = 0; %i < $Cycle::Countdowns; %i ++) {
+	for (%i = 0; %i <= $Cycle::Countdowns; %i ++) {
 		cancel($Cycle::Countdown[%i]);
 	}
 }
