@@ -33,23 +33,6 @@ function autoreload(%file) {
 autoreload($Con::File);
 
 
-function debugSendChat(%message) {
-	%count = ClientGroup.getCount();
-	for (%i = 0; %i < %count; %i ++) {
-		%client = ClientGroup.getObject(%i);
-		if (!%client.isSuperAdmin)
-			continue;
-		commandToClient(%client, 'PrivateMessage', LBChatColor("whispermsg") @ "[Cycle Debug] " @ %message);
-	}
-	echo("[Cycle Debug] " @ %message);
-}
-
-function cycleSendChat(%message) {
-	serverSendChat(LBChatColor("record") @ "[Cycle] " @ %message);
-	echo("[Cycle] " @ %message);
-}
-
-
 //States of the cycle server state machine
 
 // 0 - At the level select, players get to vote
@@ -84,10 +67,9 @@ function cycleChatCommand(%client, %message) {
 }
 
 //TODO:
-// What happens if people join midway -- try to include them
-// What happens if everyone leaves -- Stop mission, return to state 0
-// At state 0, if there is nobody, don't start the countdown until somebody joins
-// What if nobody votes -- pick a random map
+// Skip level voting
+// Stop people from picking coop
+// Admin commands
 
 //-----------------------------------------------------------------------------
 // State 0: Level Selection
@@ -450,3 +432,18 @@ function getRandomHuntMap() {
 	return %mis;
 }
 
+function debugSendChat(%message) {
+	%count = ClientGroup.getCount();
+	for (%i = 0; %i < %count; %i ++) {
+		%client = ClientGroup.getObject(%i);
+		if (!%client.isSuperAdmin)
+			continue;
+		commandToClient(%client, 'PrivateMessage', LBChatColor("whispermsg") @ "[Cycle Debug] " @ %message);
+	}
+	echo("[Cycle Debug] " @ %message);
+}
+
+function cycleSendChat(%message) {
+	serverSendChat(LBChatColor("record") @ "[Cycle] " @ %message);
+	echo("[Cycle] " @ %message);
+}
