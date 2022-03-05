@@ -57,8 +57,6 @@ function startCycleServer() {
 	$Server::Cycle = true;
 	$Server::Controllable = false;
 	$Cycle::State = -1;
-
-	cycle0start();
 }
 
 function cycleChatCommand(%client, %message) {

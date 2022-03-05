@@ -1047,6 +1047,8 @@ function statsRecordMatch(%mission) {
 	}
 	%set.delete();
 
+	fwrite("platinum/json/recordMatch.POST.txt",  %data);
+
 	%data = Mode::callback("modifyScoreData", %data, new ScriptObject() {
 		client = %player;
 		data = %data;
