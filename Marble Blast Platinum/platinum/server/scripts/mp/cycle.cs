@@ -229,9 +229,11 @@ function cycle1Start(%file) {
 		for (%j = 0; %j < %dcount; %j ++) {
 			%difficulty = getRecord(%difficulties, %j);
 			%difficultyName = getField(%difficulty, 0);
-			%ml.buildMissionList(%gameName, %difficultyName);
 
 			%missions = %ml.getMissionList(%gameName, %difficultyName);
+			if (!isObject(%missions))
+				%ml.buildMissionList(%gameName, %difficultyName);
+
 			for (%k = 0; %k < %missions.getSize(); %k ++) {
 				%mission = %missions.getEntry(%k);
 				if (%mission.getId() == %info.getId()) {
