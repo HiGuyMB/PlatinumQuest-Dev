@@ -210,13 +210,50 @@ function cycle1Start(%file) {
 		%client.cycle1Start();
 	}
 
-	%info = getMissionInfo(%file, true);
+	%info = getMissionInfo(%file, false);
 
 	$Cycle::LoadFailed = false;
 
 	debugSendChat("Playing " @ %info @ " " @ %file);
 
-	serverSetMission(%file, %info.game, %info.type, "");
+	// Which difficulty is this in, anyway
+	%ml = getMissionList("mp");
+	%games = %ml.getGameList();
+	%gcount = getRecordCount(%games);
+	for (%i = 0; %i < %gcount; %i ++) {
+		%game = getRecord(%games, %i);
+		%gameName = getField(%game, 0);
+
+		%difficulties = %ml.getDifficultyList(%gameName);
+		%dcount = getRecordCount(%difficulties);
+		for (%j = 0; %j < %dcount; %j ++) {
+			%difficulty = getRecord(%difficulties, %j);
+			%difficultyName = getField(%difficulty, 0);
+			%ml.buildMissionList(%gameName, %difficultyName);
+
+			%missions = %ml.getMissionList(%gameName, %difficultyName);
+			for (%k = 0; %k < %missions.getSize(); %k ++) {
+				%mission = %missions.getEntry(%k);
+				if (%mission.getId() == %info.getId()) {
+					%useGame = %gameName;
+					%useType = %difficultyName;
+					break;
+				}
+			}
+			if (%useGame !$= "") {
+				break;
+			}
+		}
+		if (%useGame !$= "") {
+			break;
+		}
+	}
+	if (%useGame $= "") {
+		%useGame = %info.game;
+		%useType = %info.type;
+	}
+
+	serverSetMission(%file, %useGame, %useType, "");
 	serverLoadMission(%file);
 
 	if ($Cycle::LoadFailed || !$loadingMission) {
