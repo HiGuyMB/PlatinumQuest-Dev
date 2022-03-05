@@ -53,6 +53,7 @@ $Cycle::Pause[3] = 1000*30;
 function startCycleServer() {
 	activatePackage(CycleServer);
 
+	$MP::Server::Setting[$MP::Server::Setting["MaxPlayers"], "public"] = 0;
 	$Server::Cycle = true;
 	$Server::Controllable = false;
 	$Cycle::State = -1;
@@ -62,6 +63,14 @@ function startCycleServer() {
 
 function cycleChatCommand(%client, %message) {
 	if (getWord(%message, 0) $= "/cycle") {
+		return true;
+	}
+	if (getWord(%message, 0) $= "!skip") {
+		cycleCheckSkip(%client);
+		return true;
+	}
+	if (getWord(%message, 0) $= "!rule") {
+		cycleCheckRule(%client, %message);
 		return true;
 	}
 }
@@ -82,7 +91,7 @@ function cycle0Start() {
 	//Set everybody to host so they can choose missions
 	for (%i = 0; %i < ClientGroup.getCount(); %i ++) {
 		%client = ClientGroup.getObject(%i);
-		%client.cycle0Start();
+		%client.cycle0Start(false);
 	}
 
 	// Find random missions from the server to add to the pool
@@ -96,10 +105,13 @@ function cycle0Start() {
 	cycleCountdown("Voting ends", $Cycle::Time[0], cycle0Finish);
 }
 
-function GameConnection::cycle0Start(%this) {
+function GameConnection::cycle0Start(%this, %initial) {
 	commandToClient(%this, 'HostStatus', 1);
-	%this.sendChat(LBChatColor("record") @ "[Cycle] Select a mission and press Preload to vote for it!");
+	%this.sendChat(LBChatColor("record") @ "[Server] Select a mission and press Preload to vote for it!");
 
+	if (%initial) {
+		%this.sendChat(LBChatColor("record") @ "[Server] " @ cycleFormatCountdown(cycleCountdownRemaining(), "Voting ends"));
+	}
 	%this.cycle0Vote = "";
 }
 
@@ -127,7 +139,7 @@ function cycle0Vote(%client, %file) {
 		cycle0Check();
 	} else {
 		debugSendChat(%client.getDisplayName() @ " fails to vote for " @ %file);
-		%client.sendChat(LBChatColor("record") @ "[Cycle] Server does not have that mission! Pick another one.");
+		%client.sendChat(LBChatColor("record") @ "[Server] Server does not have that mission! Pick another one.");
 	}
 }
 
@@ -204,7 +216,7 @@ function cycle1Start(%file) {
 
 	$Cycle::LoadFailed = false;
 
-	cycleSendChat("Playing " @ %info @ " " @ %file);
+	debugSendChat("Playing " @ %info @ " " @ %file);
 
 	serverSetMission(%file, %info.game, %info.type, "");
 	serverLoadMission(%file);
@@ -239,6 +251,12 @@ function cycle2Start(%file) {
 	serverEnterGame();
 
 	cycleCountdown("Playing", $Cycle::Time[2], cycle2Finish);
+	$Cycle::SkipVotes = 0;
+
+	for (%i = 0; %i < ClientGroup.getCount(); %i ++) {
+		%client = ClientGroup.getObject(%i);
+		%client.cycleVoteSkip = false;
+	}
 }
 
 function cycle2Ready(%client) {
@@ -283,6 +301,149 @@ function cycle3Cleanup() {
 function cycle3CheckCleanup() {
 	if (ClientGroup.getCount() == 0) {
 		cycle3Cleanup();
+		resetSettings();
+	}
+}
+
+//-----------------------------------------------------------------------------
+// Chat Functions
+//-----------------------------------------------------------------------------
+
+function cycleCheckSkip(%client) {
+	if ($Cycle::State == 2 || $Cycle::State == 3) {
+		if (%client.isAdmin) {
+			cycleSendChat("Skipping level by vote from an admin");
+			cycle3Cleanup();
+			return;
+		}
+		if (!%client.cycleVoteSkip) {
+			%client.cycleVoteSkip = 1;
+			$Cycle::SkipVotes ++;
+			if ($Cycle::SkipVotes >= cycleMajorityCount()) {
+				// Skip level!
+				cycleSendChat("Skipping level by popular vote (" @ $Cycle::SkipVotes @ " / " @ cycleMajorityCount() @ ")");
+				cycle3Cleanup();
+			} else if ($Cycle::SkipVotes == 0) {
+				cycleSendChat(destroyTorqueML(%client.getDisplayName()) @ "votes to skip level (" @ $Cycle::SkipVotes @ " / " @ cycleMajorityCount() @ "): !skip");
+			}
+		}
+	}
+}
+
+function cycleCheckRule(%client, %message) {
+	if ($Cycle::State != 0 && !%client.isAdmin()) {
+		%client.sendChat(LBChatColor("record") @ "[Server] Wait until the end of the round to vote for rules changes.");
+		return;
+	}
+
+	if (getWordCount(%message) == 1) {
+		// Send rule list
+		%client.sendChat(LBChatColor("record") @ "[Server]<tab:200> Rule\tCurrent Value");
+		for (%i = 0; %i < $MP::Server::Settings; %i ++) {
+			%id       = $MP::Server::Setting[%i, "id"];
+			%variable = $MP::Server::Setting[%i, "variable"];
+			%public   = $MP::Server::Setting[%i, "public"];
+			%name     = $MP::Server::Setting[%i, "name"];
+			%type     = $MP::Server::Setting[%i, "type"];
+			%min      = $MP::Server::Setting[%i, "min"];
+			%max      = $MP::Server::Setting[%i, "max"];
+
+			%value = getVariable(%variable);
+			switch$ (%type) {
+				case "number":
+					%value = %value;
+				case "check":
+					%value = %value ? "Yes" : "No";
+				case "text":
+					%value = %value;
+				case "password":
+					%value = (%value $= "") ? "" : "********";
+			}
+
+			if (%public) {
+				%client.sendChat(LBChatColor("record") @ "[Server]<tab:200> " @ destroyTorqueML(%id) @ "\t" @ destroyTorqueML(%value));
+			} else if (%client.isAdmin) {
+				%client.sendChat(LBChatColor("admin") @ "[Server]<tab:200> " @ destroyTorqueML(%id) @ "\t" @ destroyTorqueML(%value));
+			}
+		}
+		return;
+	}
+
+	%rule = getWord(%message, 1);
+	%value = getWords(%message, 2);
+
+	if ($MP::Server::Setting[%rule] $= "") {
+		%client.sendChat(LBChatColor("record") @ "[Server] That is not a rule. See !rule");
+		return;
+	}
+	%i = $MP::Server::Setting[%rule];
+
+	%id       = $MP::Server::Setting[%i, "id"];
+	%variable = $MP::Server::Setting[%i, "variable"];
+	%public   = $MP::Server::Setting[%i, "public"];
+	%name     = $MP::Server::Setting[%i, "name"];
+	%type     = $MP::Server::Setting[%i, "type"];
+	%min      = $MP::Server::Setting[%i, "min"];
+	%max      = $MP::Server::Setting[%i, "max"];
+
+	if (!%public && !%client.isAdmin()) {
+		%client.sendChat(LBChatColor("record") @ "[Server] That is not a rule. See !rule");
+		return;
+	}
+
+	// Check value
+	switch$ (%type) {
+		case "number":
+			if (%value > %max || %value < %min) {
+				%client.sendChat(LBChatColor("record") @ "[Server] Value out of range. Try " @ %min @ "-" @ %max);
+				return;
+			}
+		case "check":
+			switch$ (%value) {
+				case "true" or "yes" or "1" or "y" or "on":
+					%value = 1;
+				case "false" or "no" or "0" or "n" or "off":
+					%value = 0;
+				default:
+					%client.sendChat(LBChatColor("record") @ "[Server] Unknown value. Try yes or no");
+					return;
+			}
+		case "text":
+		case "password":
+	}
+
+	debugSendChat(%client.namebase @ " " @ %id @ " " @ %value);
+
+	// Start vote
+	if (%client.isAdmin()) {
+		// Just change it
+		%printValue = serverSetSetting(%id, %value);
+
+		//Should we announce the change (don't do this for passwords)
+		if (%printValue !$= "") {
+			serverSendChat(LBChatColor("notification") @ "An Admin has changed the " @ %name @ " setting to " @ %printValue @ ".");
+		}
+		return;
+	}
+	%client.ruleVote[%id] = %value;
+
+	// Count votes
+	%votes = 0;
+	for (%i = 0; %i < ClientGroup.getCount(); %i ++) {
+		if (ClientGroup.getObject(%i).ruleVote[%id] $= %value)
+			%votes ++;
+	}
+
+	// I love democracy
+	cycleSendChat(destroyTorqueML(%client.getDisplayName()) @ " votes for rule (" @ %votes @ " / " @ cycleMajorityCount() @ "): !rule " @ destroyTorqueML(%id) @ " " @ destroyTorqueML(%value));
+	if (%votes >= cycleMajorityCount()) {
+		// Just change it
+		%printValue = serverSetSetting(%id, %value);
+
+		//Should we announce the change (don't do this for passwords)
+		if (%printValue !$= "") {
+			serverSendChat(LBChatColor("notification") @ "Majority vote has changed the " @ %name @ " setting to " @ %printValue @ ".");
+		}
 	}
 }
 
@@ -320,7 +481,7 @@ package CycleServer {
 		case -1:
 			cycle0Start();
 		case 0:
-			%client.cycle0Start();
+			%client.cycle0Start(true);
 		case 1:
 			%client.cycle1Start();
 		}
@@ -361,6 +522,9 @@ function cycleCountdown(%name, %time, %function) {
 	//Cancel previous
 	cycleCountdownCancel();
 
+	$Cycle::CountdownStart = getSimTime();
+	$Cycle::CountdownEnd = add64_int(getSimTime(), %time);
+
 	$Cycle::Countdowns = -1; //pls
 	$Cycle::Countdown[$Cycle::Countdowns++] = schedule(%time, 0, %function);
 
@@ -389,8 +553,14 @@ function cycleCountdownCancel() {
 	}
 }
 
+function cycleCountdownRemaining() {
+	if (getSimTime() > $Cycle::CountdownEnd)
+		return 0;
+	return sub64_int($Cycle::CountdownEnd, getSimTime());
+}
+
 function cycleFormatCountdown(%time, %name) {
-	return %name @ " in " @ (%time / 1000) @ "...";
+	return %name @ " in " @ mFloor(%time / 1000) @ "...";
 }
 
 function collectMissions(%ml, %game, %difficulty, %collection) {
@@ -444,6 +614,10 @@ function debugSendChat(%message) {
 }
 
 function cycleSendChat(%message) {
-	serverSendChat(LBChatColor("record") @ "[Cycle] " @ %message);
-	echo("[Cycle] " @ %message);
+	serverSendChat(LBChatColor("record") @ "[Server] " @ %message);
+	echo("[Server] " @ %message);
+}
+
+function cycleMajorityCount() {
+	return mCeil((ClientGroup.getCount() + 1) / 2);
 }
