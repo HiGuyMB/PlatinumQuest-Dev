@@ -57,6 +57,8 @@ function startCycleServer() {
 	$Server::Cycle = true;
 	$Server::Controllable = false;
 	$Cycle::State = -1;
+
+	serverAddSetting("RandomCount", "Cycle Server Random Count", "$MPPref::Server::CycleRandomCount", true, "number", 0, 10);
 }
 
 function cycleChatCommand(%client, %message) {
@@ -93,9 +95,8 @@ function cycle0Start() {
 	}
 
 	// Find random missions from the server to add to the pool
-	%count = 2;
-	$Cycle::ServerPicks = %count;
-	for (%i = 0; %i < %count; %i ++) {
+	$Cycle::ServerPicks = $MPPref::Server::CycleRandomCount;
+	for (%i = 0; %i < $MPPref::Server::CycleRandomCount; %i ++) {
 		$Cycle::ServerPick[%i] = getRandomHuntMap().file;
 		debugSendChat("Server pick " @ %i @ " is " @ $Cycle::ServerPick[%i]);
 	}
@@ -185,7 +186,9 @@ function cycle0Finish() {
 	}
 
 	if (%levels.getSize() == 0) {
-		cycleSendChat("No votes! Using server picks...");
+		cycleSendChat("No votes! Trying again...");
+		cycle0start();
+		return;
 	}
 
 	//Pick a random one

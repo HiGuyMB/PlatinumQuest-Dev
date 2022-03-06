@@ -194,6 +194,9 @@ $MPPref::Server::PartySpawns = false;
 //Stuff for Hunt Hard Mode
 $MPPref::Server::HuntHardMode = false;
 
+//Random picks in cycle mode
+$MPPref::Server::CycleRandomCount = 2;
+
 //-----------------------------------------------------------------------------
 // Prefs
 //-----------------------------------------------------------------------------
